@@ -6,6 +6,26 @@ function sigmoid(x: number): number {
 	return 1 / (1 + Math.pow(Math.E, -x));
 }
 
+function fitness(network: NeuralNetwork) {
+	const inputs = [[0, 0], [1, 0], [0, 1], [1, 1]];
+	const outputs = [0, 1, 1, 0];
+
+	let totalError = 0;
+
+	for (let i = 0; i < 4; i++) {
+		const output = network.evaluate(inputs[i]);
+
+		if (output) {
+			const error = Math.abs(output[0] - outputs[i]);
+			totalError += error;
+		} else {
+			totalError += outputs[i];
+		}
+	}
+
+	return Math.max(0, 4 - totalError);
+}
+
 enum ActivationFunction {
 	SIGMOID,
 	TANH,
@@ -278,5 +298,65 @@ export class NEAT {
 
 			this.population.push(network);
 		}
+	}
+
+	distance(network1: NeuralNetwork, network2: NeuralNetwork, c1 = 1.0, c2 = 1.0, c3 = 0.4) {
+		let genes1 = new Map<number, NeuralConnection>();
+		let genes2 = new Map<number, NeuralConnection>();
+
+		for (let connection of network1.connections) {
+			genes1.set(connection.innovation, connection);
+		}
+
+		for (let connection of network2.connections) {
+			genes2.set(connection.innovation, connection);
+		}
+
+		let innovations1 = new Set(genes1.keys());
+		let innovations2 = new Set(genes1.keys());
+
+		let matching = innovations1.intersection(innovations2);
+		let disjoint = innovations1.symmetricDifference(innovations2);
+
+		let excess = new Set<number>();
+
+		let maxInnovations1 = Math.max(...innovations1);
+		let maxInnovations2 = Math.max(...innovations2);
+		let maxInnovation = Math.min(maxInnovations1, maxInnovations2);
+
+		let oldDisjoint = new Set([...disjoint]);
+
+		for (let innovation of oldDisjoint) {
+			if (innovation > maxInnovation) {
+				excess.add(innovation);
+				disjoint.delete(innovation);
+			}
+		}
+
+		let averageWeightDifference = 0;
+
+		if (matching) {
+			let weightDifference = 0;
+
+			for (let match of matching) {
+				const weight1 = genes1.get(match)?.weight ?? 0;
+				const weight2 = genes2.get(match)?.weight ?? 0;
+				weightDifference += Math.abs(weight1 - weight2);
+			}
+
+			averageWeightDifference = weightDifference / matching.size;
+		} else {
+			averageWeightDifference = 0;
+		}
+
+		let N = Math.max(network1.connections.length, network2.connections.length);
+
+		if (N < 20) {
+			N = 1;
+		}
+
+		const difference = (c1 * excess.size) / N + (c2 * disjoint.size) / N + c3 * averageWeightDifference;
+
+		return difference;
 	}
 }

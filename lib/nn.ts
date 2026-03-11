@@ -49,6 +49,10 @@ class NeuralNode {
 		this.activation = activation;
 		this.bias = bias;
 	}
+
+	copy() {
+		return new NeuralNode(this.id, this.layer, this.activation, this.bias);
+	}
 }
 
 class NeuralConnection {
@@ -63,6 +67,10 @@ class NeuralConnection {
 		this.weight = weight;
 		this.innovation = innovation;
 		this.enabled = enabled;
+	}
+
+	copy(): NeuralConnection {
+		return new NeuralConnection(this.inNode, this.outNode, this.weight, this.innovation, this.enabled);
 	}
 }
 
@@ -241,7 +249,7 @@ class NeuralNetwork {
 			averageWeightDifference = 0;
 		}
 
-		let N = Math.max(network1.connections.length, network2.connections.length);
+		let N = Math.max(this.connections.length, network2.connections.length);
 
 		if (N < 20) {
 			N = 1;
@@ -448,4 +456,73 @@ export class NEAT {
 		}
 	}
 
+	crossover(network1: NeuralNetwork, network2: NeuralNetwork): NeuralNetwork | void {
+		// important: network1 is always the fitter one
+
+		let offspringConnections = [];
+		let offspringNodes = new Set<NeuralNode>();
+		let allNodes = new Map<Number, NeuralNode>();
+
+		for (let node of network1.nodes.values()) {
+			const nodeCopy = node.copy();
+			allNodes.set(node.id, nodeCopy);
+			if (node.layer == NodeLayer.INPUT || node.layer == NodeLayer.OUTPUT) {
+				offspringNodes.add(nodeCopy);
+			}
+		}
+
+		for (let node of network2.nodes.values()) {
+			if (!allNodes.has(node.id)) {
+				allNodes.set(node.id, node.copy());
+			}
+		}
+
+		let genes1 = new Map<number, NeuralConnection>();
+		let genes2 = new Map<number, NeuralConnection>();
+
+		for (let gene of network1.connections) {
+			genes1.set(gene.innovation, gene);
+		}
+
+		for (let gene of network2.connections) {
+			genes2.set(gene.innovation, gene);
+		}
+
+		let allInnovation = new Set(genes1.keys()).union(new Set(genes2.keys()));
+
+		let sortedInnovations = Array.from(allInnovation).sort();
+
+		let geneCopy;
+
+		for (let innovation of sortedInnovations) {
+			let gene1 = genes1.get(innovation);
+			let gene2 = genes2.get(innovation);
+
+			if (gene1 && gene2) {
+				let selected = [gene1, gene2][Math.floor(Math.random() * 2)];
+				geneCopy = selected.copy();
+
+				if (!gene1.enabled || !gene2.enabled) {
+					if (Math.random() < 0.75) {
+						geneCopy.enabled = true;
+					}
+				}
+			} else if (gene1 && !gene2) {
+				geneCopy = gene1.copy();
+			} else {
+				continue;
+			}
+
+			let inputNode = allNodes.get(geneCopy.inNode);
+			let outputNode = allNodes.get(geneCopy.outNode);
+
+			if (inputNode && outputNode) {
+				offspringConnections.push(geneCopy);
+				offspringNodes.add(inputNode);
+				offspringNodes.add(outputNode);
+			}
+		}
+
+		return new NeuralNetwork(Array.from(offspringNodes), Array.from(offspringConnections));
+	}
 }

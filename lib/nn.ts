@@ -6,6 +6,17 @@ function sigmoid(x: number): number {
 	return 1 / (1 + Math.pow(Math.E, -x));
 }
 
+function ReLU(x: number) {
+	return Math.max(x, 0);
+}
+
+function gaussianRandom(mean: number, deviation: number) {
+	let u = 1 - Math.random();
+	let v = Math.random();
+	let z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+	return z * deviation + mean;
+}
+
 function fitness(network: NeuralNetwork) {
 	const inputs = [[0, 0], [1, 0], [0, 1], [1, 1]];
 	const outputs = [0, 1, 1, 0];
@@ -29,7 +40,8 @@ function fitness(network: NeuralNetwork) {
 enum ActivationFunction {
 	SIGMOID,
 	TANH,
-	NONE
+	RELU,
+	NONE,
 }
 
 enum NodeLayer {
@@ -188,6 +200,8 @@ class NeuralNetwork {
 
 			if (node.activation == ActivationFunction.SIGMOID) {
 				nodeValues.set(node.id, sigmoid(totalInput));
+			} else if (node.activation == ActivationFunction.RELU) {
+				nodeValues.set(node.id, ReLU(totalInput));
 			}
 		}
 
@@ -259,6 +273,144 @@ class NeuralNetwork {
 
 		return difference;
 	}
+
+	nodePathExists(startingNodeId: number, endingNodeId: number, checkedNodes: Set<number> | undefined): boolean {
+		if (!checkedNodes) {
+			checkedNodes = new Set<number>();
+		}
+
+		if (startingNodeId == endingNodeId) {
+			return true;
+		}
+
+		checkedNodes.add(startingNodeId);
+
+		for (let connection of this.connections) {
+			if (connection.enabled && connection.inNode == startingNodeId) {
+				if (!checkedNodes.has(connection.outNode)) {
+					if (this.nodePathExists(connection.outNode, endingNodeId, checkedNodes)) {
+						return true;
+					}
+				}
+			}
+		}
+
+		return false;
+	}
+
+	addConnectionMutate(innovationTracker: InnovationTracker): void {
+		let nodeSet = new Set(this.nodes.values());
+
+		const maxTries = 10;
+
+		for (let i = 0; i < maxTries; i++) {
+			const nodeArray = [...nodeSet];
+
+			let node1 = nodeArray[Math.floor(Math.random() * nodeSet.size)];
+			let node2 = nodeArray[Math.floor(Math.random() * nodeSet.size)];
+
+			if (node1.layer == NodeLayer.OUTPUT || (node1.layer == NodeLayer.HIDDEN && node2.layer == NodeLayer.INPUT)) {
+				[node1, node2] = [node2, node1];
+			}
+
+			if (node1 == node2 || node1.layer == node2.layer) {
+				continue;
+			}
+
+			if (node1.layer == NodeLayer.OUTPUT || node2.layer == NodeLayer.INPUT) {
+				continue;
+			}
+
+			let connectionExists = false;
+
+			for (let connection of this.connections) {
+				if ((connection.inNode == node1.id && connection.outNode == node2.id) || (connection.inNode == node2.id && connection.outNode == node1.id)) {
+					connectionExists = true;
+					break;
+				}
+			}
+
+			if (connectionExists) {
+				continue;
+			}
+
+			if (this.nodePathExists(node2.id, node1.id, undefined)) {
+				continue;
+			}
+
+			let innovationNumber = innovationTracker.getConnectionInnovation(node1.id, node2.id);
+			let newConnection = new NeuralConnection(node1.id, node2.id, signedRand(), innovationNumber, true);
+
+			this.connections.push(newConnection);
+			return;
+		}
+	}
+
+	addNodeMutate(innovationTracker: InnovationTracker) {
+		let enabledConnections = new Set<NeuralConnection>();
+
+		for (let connection of this.connections) {
+			if (connection.enabled) {
+				enabledConnections.add(connection);
+			}
+		}
+
+		if (enabledConnections.size == 0) {
+			return;
+		}
+
+		let randomConnection = [...enabledConnections][Math.floor(Math.random() * enabledConnections.size)];
+		randomConnection.enabled = false;
+
+		let { nodeId, connection1Innovation, connection2Innovation } = innovationTracker.getNodeInnovation(randomConnection.innovation);
+
+		let newNode = new NeuralNode(nodeId, NodeLayer.HIDDEN, ActivationFunction.RELU, signedRand());
+
+		let connection1 = new NeuralConnection(randomConnection.inNode, nodeId, 1, connection1Innovation, true);
+		let connection2 = new NeuralConnection(nodeId, randomConnection.outNode, randomConnection.weight, connection2Innovation, true);
+
+		this.nodes.set(nodeId, newNode);
+		this.connections.push(connection1, connection2);
+	}
+
+	mutateWeights(rate = 0.8, power = 0.5) {
+		for (let connection of this.connections) {
+			if (Math.random() < rate) {
+				if (Math.random() < 0.1) {
+					connection.weight = signedRand();
+				} else {
+					connection.weight += gaussianRandom(0, power);
+					connection.weight = Math.max(-5, Math.min(5, connection.weight));
+				}
+			}
+		}
+	}
+
+	mutateBias(rate = 0.7, power = 0.5) {
+		for (let node of this.nodes.values()) {
+			if (node.layer != NodeLayer.INPUT && Math.random() < rate) {
+				if (Math.random() < 0.1) {
+					node.bias = signedRand();
+				} else {
+					node.bias += gaussianRandom(0, power);
+					node.bias = Math.max(-5, Math.min(5, node.bias));
+				}
+			}
+		}
+	}
+
+	mutate(innovationTracker: InnovationTracker, connectionMutationRate = 0.05, nodeMutationRate = 0.03, weightMutationRate = 0.8, biasMutationRate = 0.7) {
+		this.mutateWeights(weightMutationRate);
+		this.mutateBias(biasMutationRate);
+
+		if (Math.random() < connectionMutationRate) {
+			this.addConnectionMutate(innovationTracker);
+		}
+
+		if (Math.random() < nodeMutationRate) {
+			this.addNodeMutate(innovationTracker);
+		}
+	}
 }
 
 
@@ -277,7 +429,7 @@ class NodePair {
 }
 
 type InnovationTriplet = {
-	nodeInnovation: number;
+	nodeId: number;
 	connection1Innovation: number;
 	connection2Innovation: number;
 }
@@ -307,7 +459,7 @@ class InnovationTracker {
 			const connection2Innovation = this.currentInnovation++;
 
 			const innovationTriplet: InnovationTriplet = {
-				nodeInnovation: nodeId,
+				nodeId,
 				connection1Innovation,
 				connection2Innovation
 			};
@@ -420,6 +572,7 @@ class Speciator {
 export class NEAT {
 	population: NeuralNetwork[] = [];
 	innovationTracker: InnovationTracker = new InnovationTracker();
+	speciator: Speciator = new Speciator();
 
 	constructor(numberOfInputs: number, numberOfOutputs: number, size: number) {
 		for (let i = 0; i < size; i++) {
@@ -432,7 +585,7 @@ export class NEAT {
 			}
 
 			for (let i = 0; i < numberOfOutputs; i++) {
-				outputs.push(new NeuralNode(i + numberOfInputs, NodeLayer.OUTPUT, ActivationFunction.SIGMOID, signedRand()));
+				outputs.push(new NeuralNode(i + numberOfInputs, NodeLayer.OUTPUT, ActivationFunction.RELU, signedRand()));
 			}
 
 			this.innovationTracker.nodeIdCounter = numberOfInputs + numberOfOutputs;
@@ -456,7 +609,7 @@ export class NEAT {
 		}
 	}
 
-	crossover(network1: NeuralNetwork, network2: NeuralNetwork): NeuralNetwork | void {
+	crossover(network1: NeuralNetwork, network2: NeuralNetwork): NeuralNetwork {
 		// important: network1 is always the fitter one
 
 		let offspringConnections = [];
@@ -524,5 +677,120 @@ export class NEAT {
 		}
 
 		return new NeuralNetwork(Array.from(offspringNodes), Array.from(offspringConnections));
+	}
+
+	evolvePopulation(fitnessScores: number[], stagnationLimit = 15) {
+		let newPopulation: NeuralNetwork[] = [];
+
+		for (let i = 0; i < fitnessScores.length; i++) {
+			this.population[i].fitness = fitnessScores[i];
+		}
+
+		this.speciator.speciate(this.population);
+
+		let speciesList = this.speciator.species;
+		speciesList.sort((a, b) => a.bestFitness - b.bestFitness);
+
+		if (speciesList.length >= 2) {
+			console.log(speciesList[0].bestFitness);
+			console.log(speciesList[1].bestFitness);
+		}
+
+		let survivingSpecies = [];
+
+		if (speciesList) {
+			survivingSpecies.push(speciesList[0]);
+		}
+
+		for (let species of speciesList.slice(1)) {
+			if (species.stagnantGenerations < stagnationLimit) {
+				survivingSpecies.push(species);
+			}
+		}
+
+		speciesList = survivingSpecies;
+
+		let totalAdjustedFitness = 0;
+
+		for (let species of speciesList) {
+			totalAdjustedFitness += species.adjustedFitness;
+
+			if (species.members.length != 0) {
+				newPopulation.push(species.members.reduce((acc, curr) => acc.fitness > curr.fitness ? acc : curr));
+			}
+		}
+
+		let remainingOffspring = this.population.length - newPopulation.length;
+
+		for (let species of speciesList) {
+			let offspringCount;
+
+			if (totalAdjustedFitness > 0) {
+				offspringCount = Math.trunc((species.adjustedFitness / totalAdjustedFitness) * remainingOffspring);
+			} else {
+				offspringCount = Math.floor(remainingOffspring / speciesList.length);
+			}
+
+			if (offspringCount > 0) {
+				let offspring = reproduceSpecies(species, offspringCount);
+				this.population.push(...offspring);
+			}
+
+			while (newPopulation.length < this.population.length) {
+				let bestSpecies = speciesList.reduce((acc, curr) => acc.adjustedFitness > curr.adjustedFitness ? acc : curr);
+				let offspring = reproduceSpecies(bestSpecies, 1);
+				this.population.push(...offspring);
+			}
+		}
+
+		this.population = newPopulation;
+	}
+
+	reproduceSpecies(species: Species, offspringCount: number) {
+		let offspring: NeuralNetwork[] = [];
+
+		if (species.members.length == 1) {
+			for (let i = 0; i < offspringCount; i++) {
+				let nodes = [];
+				let connectors = [];
+
+				for (let node of species.members[0].nodes.values()) {
+					nodes.push(node.copy());
+				}
+
+				for (let connector of species.members[0].connections.values()) {
+					connectors.push(connector.copy());
+				}
+
+				let child = new NeuralNetwork(nodes, connectors);
+
+				child.mutate(this.innovationTracker);
+
+				offspring.push(child);
+			}
+		} else {
+			for (let i = 0; i < offspringCount; i++) {
+				let speciesSize = species.members.length;
+
+				let parent1 = species.members[Math.floor(Math.random() * speciesSize)];
+				let parent2;
+
+				do {
+					parent2 = species.members[Math.floor(Math.random() * speciesSize)]
+				} while (parent1 == parent2);
+
+				if (parent1.fitness < parent2.fitness) {
+					[parent1, parent2] = [parent2, parent1];
+				}
+
+				let child = this.crossover(parent1, parent2);
+
+				child.mutate(this.innovationTracker);
+
+				offspring.push(child);
+			}
+		}
+
+		return offspring;
 	}
 }

@@ -3,7 +3,7 @@ function signedRand() {
 }
 
 function sigmoid(x: number): number {
-	return 1 / (1 + Math.pow(Math.E, -x));
+	return 1 / (1 + Math.exp(-x));
 }
 
 function ReLU(x: number) {
@@ -15,26 +15,6 @@ function gaussianRandom(mean: number, deviation: number) {
 	let v = Math.random();
 	let z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 	return z * deviation + mean;
-}
-
-function fitness(network: NeuralNetwork) {
-	const inputs = [[0, 0], [1, 0], [0, 1], [1, 1]];
-	const outputs = [0, 1, 1, 0];
-
-	let totalError = 0;
-
-	for (let i = 0; i < 4; i++) {
-		const output = network.evaluate(inputs[i]);
-
-		if (output) {
-			const error = Math.abs(output[0] - outputs[i]);
-			totalError += error;
-		} else {
-			totalError += outputs[i];
-		}
-	}
-
-	return Math.max(0, 4 - totalError);
 }
 
 enum ActivationFunction {
@@ -86,14 +66,18 @@ class NeuralConnection {
 	}
 }
 
-class NeuralNetwork {
+export class NeuralNetwork {
 	nodes: Map<number, NeuralNode> = new Map();
 	connections: NeuralConnection[];
 
 	fitness: number = 0;
 
 	constructor(nodes: NeuralNode[], connections: NeuralConnection[]) {
-		this.connections = connections;
+		this.connections = [];
+
+		for (let connection of connections) {
+			this.connections.push(connection.copy());
+		}
 
 		for (let node of nodes) {
 			this.nodes.set(node.id, node);
@@ -178,7 +162,7 @@ class NeuralNetwork {
 		const sortedNodes = this.topologicalSort(edges);
 
 		for (let node of sortedNodes) {
-			if (nodeValues.get(node.id)) {
+			if (nodeValues.has(node.id)) {
 				continue;
 			}
 
@@ -193,7 +177,7 @@ class NeuralNetwork {
 			for (let connection of incoming) {
 				let inputValue = nodeValues.get(connection.inNode);
 
-				if (inputValue) {
+				if (inputValue !== undefined) {
 					totalInput += inputValue * connection.weight;
 				}
 			}
@@ -202,6 +186,8 @@ class NeuralNetwork {
 				nodeValues.set(node.id, sigmoid(totalInput));
 			} else if (node.activation == ActivationFunction.RELU) {
 				nodeValues.set(node.id, ReLU(totalInput));
+			} else if (node.activation == ActivationFunction.NONE) {
+				nodeValues.set(node.id, totalInput);
 			}
 		}
 
@@ -227,15 +213,15 @@ class NeuralNetwork {
 		}
 
 		let innovations1 = new Set(genes1.keys());
-		let innovations2 = new Set(genes1.keys());
+		let innovations2 = new Set(genes2.keys());
 
 		let matching = innovations1.intersection(innovations2);
 		let disjoint = innovations1.symmetricDifference(innovations2);
 
 		let excess = new Set<number>();
 
-		let maxInnovations1 = Math.max(...innovations1);
-		let maxInnovations2 = Math.max(...innovations2);
+		let maxInnovations1 = Math.max(...innovations1) ?? 0;
+		let maxInnovations2 = Math.max(...innovations2) ?? 0;
 		let maxInnovation = Math.min(maxInnovations1, maxInnovations2);
 
 		let oldDisjoint = new Set([...disjoint]);
@@ -249,7 +235,7 @@ class NeuralNetwork {
 
 		let averageWeightDifference = 0;
 
-		if (matching) {
+		if (matching.size != 0) {
 			let weightDifference = 0;
 
 			for (let match of matching) {
@@ -259,8 +245,6 @@ class NeuralNetwork {
 			}
 
 			averageWeightDifference = weightDifference / matching.size;
-		} else {
-			averageWeightDifference = 0;
 		}
 
 		let N = Math.max(this.connections.length, network2.connections.length);
@@ -307,13 +291,17 @@ class NeuralNetwork {
 			const nodeArray = [...nodeSet];
 
 			let node1 = nodeArray[Math.floor(Math.random() * nodeSet.size)];
-			let node2 = nodeArray[Math.floor(Math.random() * nodeSet.size)];
+			let node2;
+
+			do {
+				node2 = nodeArray[Math.floor(Math.random() * nodeSet.size)];
+			} while (node1 == node2);
 
 			if (node1.layer == NodeLayer.OUTPUT || (node1.layer == NodeLayer.HIDDEN && node2.layer == NodeLayer.INPUT)) {
 				[node1, node2] = [node2, node1];
 			}
 
-			if (node1 == node2 || node1.layer == node2.layer) {
+			if (node1 == node2) {
 				continue;
 			}
 
@@ -364,7 +352,7 @@ class NeuralNetwork {
 
 		let { nodeId, connection1Innovation, connection2Innovation } = innovationTracker.getNodeInnovation(randomConnection.innovation);
 
-		let newNode = new NeuralNode(nodeId, NodeLayer.HIDDEN, ActivationFunction.RELU, signedRand());
+		let newNode = new NeuralNode(nodeId, NodeLayer.HIDDEN, ActivationFunction.SIGMOID, signedRand());
 
 		let connection1 = new NeuralConnection(randomConnection.inNode, nodeId, 1, connection1Innovation, true);
 		let connection2 = new NeuralConnection(nodeId, randomConnection.outNode, randomConnection.weight, connection2Innovation, true);
@@ -473,7 +461,7 @@ class InnovationTracker {
 			return triplet;
 		} else {
 			return {
-				nodeInnovation: 0,
+				nodeId: 0,
 				connection1Innovation: 0,
 				connection2Innovation: 0
 			};
@@ -545,7 +533,7 @@ class Speciator {
 			let foundSpecies = false;
 
 			for (let species of this.species) {
-				if (species.representative.distanceTo(network) < this.compatibilityThreshold) {
+				if (network.distanceTo(species.representative) < this.compatibilityThreshold) {
 					species.addMember(network);
 					foundSpecies = true;
 					break;
@@ -573,8 +561,11 @@ export class NEAT {
 	population: NeuralNetwork[] = [];
 	innovationTracker: InnovationTracker = new InnovationTracker();
 	speciator: Speciator = new Speciator();
+	fitnessFunction: (network: NeuralNetwork) => number
 
-	constructor(numberOfInputs: number, numberOfOutputs: number, size: number) {
+	constructor(numberOfInputs: number, numberOfOutputs: number, size: number, fitnessFunction: (network: NeuralNetwork) => number) {
+		this.fitnessFunction = fitnessFunction;
+
 		for (let i = 0; i < size; i++) {
 			let inputs: NeuralNode[] = [];
 			let outputs: NeuralNode[] = [];
@@ -585,7 +576,7 @@ export class NEAT {
 			}
 
 			for (let i = 0; i < numberOfOutputs; i++) {
-				outputs.push(new NeuralNode(i + numberOfInputs, NodeLayer.OUTPUT, ActivationFunction.RELU, signedRand()));
+				outputs.push(new NeuralNode(i + numberOfInputs, NodeLayer.OUTPUT, ActivationFunction.SIGMOID, signedRand()));
 			}
 
 			this.innovationTracker.nodeIdCounter = numberOfInputs + numberOfOutputs;
@@ -619,9 +610,7 @@ export class NEAT {
 		for (let node of network1.nodes.values()) {
 			const nodeCopy = node.copy();
 			allNodes.set(node.id, nodeCopy);
-			if (node.layer == NodeLayer.INPUT || node.layer == NodeLayer.OUTPUT) {
-				offspringNodes.add(nodeCopy);
-			}
+			offspringNodes.add(nodeCopy);
 		}
 
 		for (let node of network2.nodes.values()) {
@@ -643,7 +632,7 @@ export class NEAT {
 
 		let allInnovation = new Set(genes1.keys()).union(new Set(genes2.keys()));
 
-		let sortedInnovations = Array.from(allInnovation).sort();
+		let sortedInnovations = Array.from(allInnovation).sort((a, b) => a - b);
 
 		let geneCopy;
 
@@ -657,7 +646,7 @@ export class NEAT {
 
 				if (!gene1.enabled || !gene2.enabled) {
 					if (Math.random() < 0.75) {
-						geneCopy.enabled = true;
+						geneCopy.enabled = false;
 					}
 				}
 			} else if (gene1 && !gene2) {
@@ -689,16 +678,11 @@ export class NEAT {
 		this.speciator.speciate(this.population);
 
 		let speciesList = this.speciator.species;
-		speciesList.sort((a, b) => a.bestFitness - b.bestFitness);
-
-		if (speciesList.length >= 2) {
-			console.log(speciesList[0].bestFitness);
-			console.log(speciesList[1].bestFitness);
-		}
+		speciesList.sort((a, b) => b.bestFitness - a.bestFitness);
 
 		let survivingSpecies = [];
 
-		if (speciesList) {
+		if (speciesList.length != 0) {
 			survivingSpecies.push(speciesList[0]);
 		}
 
@@ -732,15 +716,15 @@ export class NEAT {
 			}
 
 			if (offspringCount > 0) {
-				let offspring = reproduceSpecies(species, offspringCount);
-				this.population.push(...offspring);
+				let offspring = this.reproduceSpecies(species, offspringCount);
+				newPopulation.push(...offspring);
 			}
+		}
 
-			while (newPopulation.length < this.population.length) {
-				let bestSpecies = speciesList.reduce((acc, curr) => acc.adjustedFitness > curr.adjustedFitness ? acc : curr);
-				let offspring = reproduceSpecies(bestSpecies, 1);
-				this.population.push(...offspring);
-			}
+		while (newPopulation.length < this.population.length) {
+			let bestSpecies = speciesList.reduce((acc, curr) => acc.adjustedFitness > curr.adjustedFitness ? acc : curr);
+			let offspring = this.reproduceSpecies(bestSpecies, 1);
+			newPopulation.push(...offspring);
 		}
 
 		this.population = newPopulation;
@@ -792,5 +776,35 @@ export class NEAT {
 		}
 
 		return offspring;
+	}
+
+	evolve() {
+		let overallBestFitness = 0;
+
+		for (let generation = 0; generation < 15000; generation++) {
+			let fitnessScores = this.population.map(el => this.fitnessFunction(el));
+
+			let bestFitness = Math.max(...fitnessScores);
+			overallBestFitness = Math.max(overallBestFitness, bestFitness);
+			let averageFitness = fitnessScores.reduce((acc, curr) => acc + curr, 0) / fitnessScores.length;
+
+			console.log(`Generation ${generation}: Best=${bestFitness.toFixed(3)}, Avg=${averageFitness.toFixed(3)}, Species=${this.speciator.species.length}`);
+
+			if (bestFitness >= 3.9 || generation == 14999) {
+				console.log(`Problem solved in ${generation} generations!`);
+				console.log(`Best fitness achieved was ${bestFitness}`);
+
+				let best = fitnessScores.indexOf(bestFitness);
+
+				console.log(this.population[best]);
+
+				return;
+			}
+
+			this.evolvePopulation(fitnessScores);
+		}
+
+		console.log("Couldn't solve xor in 50 generations.");
+		console.log(`The overall best fitness was ${overallBestFitness}`);
 	}
 }

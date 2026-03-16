@@ -791,8 +791,12 @@ export class NEAT {
 			console.log(`Generation ${generation}: Best=${bestFitness.toFixed(3)}, Avg=${averageFitness.toFixed(3)}, Species=${this.speciator.species.length}`);
 
 			if (bestFitness >= 3.9 || generation == 14999) {
-				console.log(`Problem solved in ${generation} generations!`);
-				console.log(`Best fitness achieved was ${bestFitness}`);
+				if (generation == 14999) {
+					console.log(`Problem was not solved in ${generation} generations :(`);
+				} else {
+					console.log(`Problem solved in ${generation} generations!`);
+				}
+				console.log(`The best fitness achieved was ${bestFitness}`);
 
 				let best = fitnessScores.indexOf(bestFitness);
 
